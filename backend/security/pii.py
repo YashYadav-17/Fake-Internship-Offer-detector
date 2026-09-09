@@ -10,6 +10,11 @@ PAN_PATTERN = re.compile(
     r"\b[A-Za-z]{5}[0-9]{4}[A-Za-z]{1}\b"
 )
 
+# Indian Aadhaar format: 12 digits (e.g. 2345 6789 0123 or 2345-6789-0123)
+AADHAAR_PATTERN = re.compile(
+    r"\b[2-9]\d{3}[\s-]\d{4}[\s-]\d{4}\b"
+)
+
 # Phone numbers: +91 9876543210, +91-98765-43210, 9876543210, +1 (555) 123-4567, etc.
 # Carefully crafted to avoid masking standalone amounts like 20,000 or years like 2026.
 PHONE_PATTERN = re.compile(
@@ -21,7 +26,7 @@ PHONE_PATTERN = re.compile(
 
 def mask_pii(text: str) -> str:
     """
-    Lightweight, explainable redaction of common PII (email, phone, PAN).
+    Lightweight, explainable redaction of common PII (email, phone, PAN, Aadhaar).
     
     This provides baseline privacy protection before sending untrusted offer text 
     to external LLM providers. Note: This is lightweight heuristic masking, 
@@ -37,6 +42,9 @@ def mask_pii(text: str) -> str:
 
     # Redact PAN Cards
     masked = PAN_PATTERN.sub("[PAN_REDACTED]", masked)
+
+    # Redact Aadhaar Numbers
+    masked = AADHAAR_PATTERN.sub("[AADHAAR_REDACTED]", masked)
 
     # Redact Phone Numbers
     masked = PHONE_PATTERN.sub("[PHONE_REDACTED]", masked)
