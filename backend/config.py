@@ -1,15 +1,17 @@
 import os
+from pathlib import Path
 from dotenv import load_dotenv
 
-# Load .env if present
-load_dotenv()
+# Load .env anchored to project root
+env_path = Path(__file__).resolve().parent.parent / ".env"
+load_dotenv(dotenv_path=env_path)
 
 
 class Settings:
     """Backend environment settings."""
 
     GEMINI_API_KEY: str = os.getenv("GEMINI_API_KEY", "").strip()
-    GEMINI_MODEL: str = os.getenv("GEMINI_MODEL", "gemini-2.5-flash").strip()
+    GEMINI_MODEL: str = os.getenv("GEMINI_MODEL", "gemini-3.5-flash-lite").strip()
     HOST: str = os.getenv("HOST", "0.0.0.0").strip()
     PORT: int = int(os.getenv("PORT", "8000"))
 

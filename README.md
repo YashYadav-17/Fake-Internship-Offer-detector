@@ -153,8 +153,8 @@ Edit `.env`:
 # Google Gemini API Key (Optional for deterministic local dev, required for AI analysis)
 GEMINI_API_KEY=your_gemini_api_key_here
 
-# Gemini Model
-GEMINI_MODEL=gemini-2.5-flash
+# Gemini Model (Default: gemini-3.5-flash-lite)
+GEMINI_MODEL=gemini-3.5-flash-lite
 
 # Server Host & Port
 HOST=0.0.0.0
@@ -164,12 +164,20 @@ PORT=8000
 CORS_ORIGINS=http://localhost:3000,http://localhost:5173,http://127.0.0.1:3000,http://127.0.0.1:5173
 ```
 
-### 4. Run the Server
+### 4. Run the Backend API
 ```bash
 uvicorn backend.main:app --reload --host 0.0.0.0 --port 8000
 ```
 - **Interactive Swagger Docs**: `http://localhost:8000/docs`
 - **ReDoc**: `http://localhost:8000/redoc`
+
+### 5. Run the Frontend (React + Vite)
+```bash
+cd frontend
+npm install
+npm run dev
+```
+- **Web Interface**: `http://localhost:5173`
 
 ---
 
