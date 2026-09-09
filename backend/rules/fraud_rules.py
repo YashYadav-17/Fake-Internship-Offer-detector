@@ -23,12 +23,35 @@ RULES_CONFIG = [
         "check_negation": True
     },
     {
+        "type": "RECRUITMENT_ANOMALY",
+        "severity": SeverityLevel.HIGH,
+        "patterns": [
+            r"\bselect(?:ed)?\s+(?:directly\s+)?without\s+(?:any\s+)?(?:interview|test|assessment|screening|exam|rounds?)\b",
+            r"\bdirect\s+(?:selection|joining|offer|appointment|hiring)\s+without\s+(?:interview|test|assessment)\b",
+            r"\bno\s+interview\s+(?:required|needed|conducted)\b",
+            r"\bguaranteed\s+(?:selection|placement|job|offer|internship)\b",
+        ],
+        "check_negation": False
+    },
+    {
         "type": "NO_INTERVIEW_SELECTION",
         "severity": SeverityLevel.HIGH,
         "patterns": [
             r"\bselect(?:ed)?\s+(?:directly\s+)?without\s+(?:any\s+)?(?:interview|test|assessment|screening|exam|rounds?)\b",
             r"\bdirect\s+(?:selection|joining|offer|appointment|hiring)\s+without\s+(?:interview|test|assessment)\b",
             r"\bno\s+interview\s+(?:required|needed|conducted)\b",
+        ],
+        "check_negation": False
+    },
+    {
+        "type": "SENSITIVE_INFORMATION",
+        "severity": SeverityLevel.HIGH,
+        "patterns": [
+            r"\b(?:send|submit|provide|share|upload|forward|give)\s+(?:your\s+)?(?:pan|\[pan_redacted\]|aadhaar|aadhar|\[aadhaar_redacted\]|bank\s+account|bank\s+details|passbook|card\s+details|debit\s+card)\b",
+            r"\b(?:pan|aadhaar|aadhar)\s+(?:and|,)?\s*(?:bank\s+account|bank\s+details)\b",
+            r"\b(?:bank\s+account\s+details|netbanking\s+password|banking\s+credentials)\b",
+            r"\b(?:send|provide|share)\s+(?:your\s+)?(?:pan|aadhaar|aadhar)\b",
+            r"\b(?:bank\s+)?(?:password|pin|otp|cvv|netbanking\s+password)\b",
         ],
         "check_negation": False
     },
@@ -46,6 +69,7 @@ RULES_CONFIG = [
         "type": "ARTIFICIAL_URGENCY",
         "severity": SeverityLevel.MEDIUM,
         "patterns": [
+            r"\b(?:pay|deposit|transfer|send|fee|fees|amount)\b[^\.\n]{0,60}\b(?:today|immediately|urgently)\b",
             r"\b(?:pay|transfer|confirm|accept|reply)\s+(?:today|immediately|urgently|within\s+\d+\s*(?:hour|min|hr|day)s?|before\s+\d+\s*(?:am|pm)|by\s+\d+\s*(?:am|pm)\s*today|before\s+(?:friday|monday|tuesday|wednesday|thursday|saturday|sunday))\b",
             r"\b(?:within|in)\s+(?:1|2|24|48)\s*hours?\b",
             r"\blast\s+chance\s+to\s+(?:confirm|claim|pay|register)\b",

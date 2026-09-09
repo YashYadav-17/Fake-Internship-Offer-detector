@@ -45,7 +45,7 @@ class OfferAnalyzer:
         1. PII Redaction
         2. Deterministic Rule Matching
         3. Gemini NLP Classification (with fallback)
-        4. Synthesis and Normalization
+        4. Synthesis, Evidence Grounding & Normalization
         """
         # Step 1: PII Masking
         masked_text = mask_pii(raw_text)
@@ -54,6 +54,10 @@ class OfferAnalyzer:
         rule_indicators: List[Indicator] = extract_deterministic_indicators(masked_text)
         has_high_rule = any(ind.severity == SeverityLevel.HIGH for ind in rule_indicators)
         has_payment_rule = any(ind.type == "PAYMENT_REQUEST" for ind in rule_indicators)
+        has_sensitive_rule = any(
+            ind.type in ("SENSITIVE_INFORMATION", "SUSPICIOUS_DOCUMENT_REQUEST")
+            for ind in rule_indicators
+        )
         has_medium_rule = any(ind.severity == SeverityLevel.MEDIUM for ind in rule_indicators)
 
         # Step 3: Call Gemini AI
@@ -66,15 +70,19 @@ class OfferAnalyzer:
                 rule_indicators=rule_indicators,
                 has_high_rule=has_high_rule,
                 has_payment_rule=has_payment_rule,
+                has_sensitive_rule=has_sensitive_rule,
                 has_medium_rule=has_medium_rule,
+                raw_text=raw_text,
+                masked_text=masked_text,
             )
         else:
             return self._build_deterministic_fallback_response(
                 rule_indicators=rule_indicators,
                 has_high_rule=has_high_rule,
                 has_payment_rule=has_payment_rule,
+                has_sensitive_rule=has_sensitive_rule,
                 has_medium_rule=has_medium_rule,
-                text=masked_text
+                text=masked_text,
             )
 
     def _synthesize_ai_response(
@@ -83,9 +91,12 @@ class OfferAnalyzer:
         rule_indicators: List[Indicator],
         has_high_rule: bool,
         has_payment_rule: bool,
+        has_sensitive_rule: bool,
         has_medium_rule: bool,
+        raw_text: str,
+        masked_text: str,
     ) -> AnalyzeResponse:
-        """Combine Gemini output with deterministic rule invariants."""
+        """Combine Gemini output with deterministic rule invariants and evidence verification."""
         # Parse AI Risk
         raw_risk = str(ai_data.get("risk", "SUSPICIOUS")).upper()
         if raw_risk in ("SAFE", "SUSPICIOUS", "HIGH_RISK"):
@@ -93,33 +104,48 @@ class OfferAnalyzer:
         else:
             ai_risk = RiskLevel.SUSPICIOUS
 
-        # Parse AI Indicators
+        # Parse and Ground AI Indicators
         combined_indicators: List[Indicator] = list(rule_indicators)
         seen_types = {ind.type for ind in rule_indicators}
 
-        for item in ai_data.get("indicators", []):
-            if isinstance(item, dict):
-                ind_type = str(item.get("type", "CONTEXTUAL_ANOMALY")).upper()
-                raw_sev = str(item.get("severity", "MEDIUM")).upper()
-                sev = (
-                    SeverityLevel(raw_sev)
-                    if raw_sev in ("LOW", "MEDIUM", "HIGH")
-                    else SeverityLevel.MEDIUM
-                )
-                evidence = str(item.get("evidence", "")).strip()
-
-                if ind_type not in seen_types and evidence:
-                    combined_indicators.append(
-                        Indicator(type=ind_type, severity=sev, evidence=evidence)
+        raw_indicators = ai_data.get("indicators", [])
+        if isinstance(raw_indicators, list):
+            for item in raw_indicators:
+                if isinstance(item, dict):
+                    ind_type = str(item.get("type", "CONTEXTUAL_LANGUAGE")).upper().strip()
+                    raw_sev = str(item.get("severity", "MEDIUM")).upper().strip()
+                    sev = (
+                        SeverityLevel(raw_sev)
+                        if raw_sev in ("LOW", "MEDIUM", "HIGH")
+                        else SeverityLevel.MEDIUM
                     )
-                    seen_types.add(ind_type)
+                    evidence = str(item.get("evidence", "")).strip()
 
-        # INVARIANT: Deterministic high severity / payment rules MUST override optimistic AI classifications
-        if has_payment_rule or (has_high_rule and ai_risk == RiskLevel.SAFE):
+                    # Hallucination check: evidence must be non-empty and present in text
+                    if not evidence or len(evidence) < 2:
+                        continue
+                    if not self._is_evidence_grounded(evidence, raw_text, masked_text):
+                        logger.warning(
+                            "Filtered ungrounded AI indicator '%s' with evidence: %s",
+                            ind_type,
+                            evidence,
+                        )
+                        continue
+
+                    if ind_type not in seen_types:
+                        combined_indicators.append(
+                            Indicator(type=ind_type, severity=sev, evidence=evidence)
+                        )
+                        seen_types.add(ind_type)
+
+        # INVARIANT: Deterministic high severity / payment / sensitive info rules MUST override optimistic AI classifications
+        if has_payment_rule or has_sensitive_rule or has_high_rule:
             final_risk = RiskLevel.HIGH_RISK
         elif has_medium_rule and ai_risk == RiskLevel.SAFE:
             final_risk = RiskLevel.SUSPICIOUS
-        elif ai_risk == RiskLevel.HIGH_RISK or has_high_rule:
+        elif self._is_insufficient_or_vague(raw_text) and ai_risk == RiskLevel.SAFE:
+            final_risk = RiskLevel.SUSPICIOUS
+        elif ai_risk == RiskLevel.HIGH_RISK:
             final_risk = RiskLevel.HIGH_RISK
         elif ai_risk == RiskLevel.SUSPICIOUS:
             final_risk = RiskLevel.SUSPICIOUS
@@ -130,6 +156,8 @@ class OfferAnalyzer:
         ai_explanation = str(ai_data.get("explanation", "")).strip()
         if not ai_explanation:
             ai_explanation = self._generate_fallback_explanation(final_risk, combined_indicators)
+        else:
+            ai_explanation = self._sanitize_explanation(ai_explanation, final_risk)
 
         # Actions
         raw_actions = ai_data.get("next_actions", [])
@@ -145,16 +173,56 @@ class OfferAnalyzer:
             next_actions=next_actions,
         )
 
+    def _is_evidence_grounded(self, evidence: str, raw_text: str, masked_text: str) -> bool:
+        """Verify that AI-cited evidence corresponds to text present in the offer."""
+        if not evidence or len(evidence.strip()) < 2:
+            return False
+
+        import re
+        snippet = re.sub(r"^[\.\s\"'’\–\-]+|[\.\s\"'’\–\-]+$", "", evidence).strip().lower()
+        if not snippet:
+            return False
+
+        raw_lower = raw_text.lower()
+        masked_lower = masked_text.lower()
+
+        # Direct substring check
+        if snippet in raw_lower or snippet in masked_lower:
+            return True
+
+        # Multi-word token overlap check for quotes with slight truncation
+        tokens = [t for t in re.findall(r"\b\w{3,}\b", snippet)]
+        if not tokens:
+            return any(part in raw_lower for part in snippet.split())
+
+        matched_tokens = sum(1 for t in tokens if t in raw_lower or t in masked_lower)
+        return (matched_tokens / len(tokens)) >= 0.65
+
+    def _sanitize_explanation(self, explanation: str, risk: RiskLevel) -> str:
+        """Prevent absolute assertions of fraud or authenticity."""
+        import re
+        sanitized = explanation
+        replacements = [
+            (r"\b(?:definitely|certainly|100%)\s+fraudulent\b", "high-risk warning signs"),
+            (r"\b(?:definitely|certainly|100%)\s+a\s+scam\b", "high-risk warning signs"),
+            (r"\b(?:is|are)\s+(?:definitely|confirmed)\s+(?:fake|fraud|scam)\b", "displays strong scam risk indicators"),
+            (r"\b(?:definitely|guaranteed|100%)\s+(?:genuine|legitimate|real|safe)\b", "consistent with standard recruitment format"),
+        ]
+        for pattern, repl in replacements:
+            sanitized = re.sub(pattern, repl, sanitized, flags=re.IGNORECASE)
+        return sanitized
+
     def _build_deterministic_fallback_response(
         self,
         rule_indicators: List[Indicator],
         has_high_rule: bool,
         has_payment_rule: bool,
+        has_sensitive_rule: bool,
         has_medium_rule: bool,
         text: str,
     ) -> AnalyzeResponse:
         """Deterministic rule-only analysis when Gemini is not configured or fails."""
-        if has_payment_rule or has_high_rule:
+        if has_payment_rule or has_sensitive_rule or has_high_rule:
             final_risk = RiskLevel.HIGH_RISK
         elif has_medium_rule:
             final_risk = RiskLevel.SUSPICIOUS
